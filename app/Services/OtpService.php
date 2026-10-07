@@ -4,86 +4,97 @@ namespace App\Services;
 
 use App\Models\OtpCode;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\RateLimiter;
 
 class OtpService
 {
+    protected const MAX_ATTEMPTS = 5;
+    protected const LOCK_SECONDS = 1800;
+
     public function __construct(protected SmsService $sms)
     {
     }
 
-    /**
-     * یک کد جدید می‌سازد و پیامک می‌کند.
-     * برمی‌گرداند: true اگر ارسال شد، false اگر به دلیل محدودیت نرخ ارسال رد شد.
-     */
     public function requestCode(string $phone, string $purpose): bool
     {
-        $throttleKey = "otp_throttle:{$purpose}:{$phone}";
-
-        if (Cache::has($throttleKey)) {
-            return false; // باید حداقل ۶۰ ثانیه صبر کند
+        // Cache::add اتمیک است: فقط یک درخواست در ۶۰ ثانیه موفق می‌شود
+        if (! Cache::add("otp_throttle:{$purpose}:{$phone}", true, 60)) {
+            return false;
         }
 
-        // کدهای قبلی مصرف‌نشده‌ی همین شماره را باطل می‌کنیم
         OtpCode::where('phone', $phone)
             ->where('purpose', $purpose)
             ->whereNull('consumed_at')
             ->update(['consumed_at' => now()]);
 
-        $code = (string) random_int(10000, 99999);
+        $code = (string) random_int(100000, 999999);
 
         OtpCode::create([
             'phone' => $phone,
-            'code' => $code,
+            'code' => $this->hash($code),
             'purpose' => $purpose,
             'expires_at' => now()->addMinutes(2),
         ]);
 
-        Cache::put($throttleKey, true, 60);
-        Cache::forget("otp_attempts:{$purpose}:{$phone}");
+        // عمداً شمارنده‌ی تلاش‌ها را ریست نمی‌کنیم
 
         $this->sms->send($phone, "قهوه‌چیان: کد ورود شما {$code} است. تا ۲ دقیقه معتبر است.");
 
         return true;
     }
 
-    /**
-     * کد را بررسی می‌کند. در صورت درست بودن true برمی‌گرداند و کد را مصرف‌شده علامت می‌زند.
-     * برای جلوگیری از حدس‌زدن brute-force، بعد از ۳ تلاش ناموفق به مدت ۳۰ دقیقه قفل می‌شود.
-     */
     public function verifyCode(string $phone, string $code, string $purpose): bool
     {
-        $attemptsKey = "otp_attempts:{$purpose}:{$phone}";
-        $attempts = Cache::get($attemptsKey, 0);
+        $key = $this->attemptsKey($phone, $purpose);
 
-        if ($attempts >= 3) {
+        if (RateLimiter::tooManyAttempts($key, self::MAX_ATTEMPTS)) {
             return false;
         }
 
+        // اول تلاش را می‌شماریم، بعد بررسی می‌کنیم؛ پس درخواست‌های موازی هم شمرده می‌شوند
+        RateLimiter::hit($key, self::LOCK_SECONDS);
+
         $otp = OtpCode::where('phone', $phone)
             ->where('purpose', $purpose)
-            ->where('code', $code)
+            ->where('code', $this->hash($code))
             ->whereNull('consumed_at')
             ->where('expires_at', '>', now())
             ->first();
 
         if (! $otp) {
-            Cache::put($attemptsKey, $attempts + 1, now()->addMinutes(30));
             return false;
         }
 
-        $otp->consumed_at = now();
-        $otp->save();
+        // مصرف اتمیک: اگر دو درخواست هم‌زمان با کد درست بیایند، فقط یکی موفق می‌شود
+        $consumed = OtpCode::whereKey($otp->id)
+            ->whereNull('consumed_at')
+            ->update(['consumed_at' => now()]);
 
-        Cache::forget($attemptsKey);
+        if ($consumed !== 1) {
+            return false;
+        }
+
+        RateLimiter::clear($key);
 
         return true;
     }
 
-    /**
-     * تعیین می‌کند آیا شماره در حال حاضر قفل است (به دلیل تلاش‌های ناموفق زیاد)
-     */
     public function isLocked(string $phone, string $purpose): bool
     {
-        return Cache::get("otp_attempts:{$purpose}:{$phone}", 0) >= 3;
+        return RateLimiter::tooManyAttempts(
+            $this->attemptsKey($phone, $purpose),
+            self::MAX_ATTEMPTS
+        );
+    }
+
+    protected function attemptsKey(string $phone, string $purpose): string
+    {
+        return "otp_verify:{$purpose}:{$phone}";
+    }
+
+    // کد در دیتابیس به‌صورت hash ذخیره می‌شود، نه متن ساده
+    protected function hash(string $code): string
+    {
+        return hash_hmac('sha256', $code, (string) config('app.key'));
     }
 }

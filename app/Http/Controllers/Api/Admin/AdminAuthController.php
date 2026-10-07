@@ -73,6 +73,7 @@ public function verifyOtp(Request $request, OtpService $otpService)
     }
 
     $token = $admin->createToken('otp_login')->plainTextToken;
+    // $token = $admin->createToken('otp_login', ['*'], now()->addHours(8))->plainTextToken;
 
     return response()->json([
         'token' => $token,

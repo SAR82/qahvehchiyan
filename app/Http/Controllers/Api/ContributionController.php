@@ -64,37 +64,41 @@ class ContributionController extends Controller
     {
         $frontendUrl = config('app.frontend_url');
         $suffix = '&type=contribution';
-
-        $contribution = DB::transaction(function () use ($contribution) {
-            return Contribution::lockForUpdate()->find($contribution->id);
+        $authority = (string) $request->query('Authority', '');
+    
+        $redirectTo = DB::transaction(function () use ($contribution, $request, $authority, $frontendUrl, $suffix) {
+            $c = Contribution::lockForUpdate()->findOrFail($contribution->id);
+    
+            if (! $c->gateway_ref || ! hash_equals($c->gateway_ref, $authority)) {
+                return $frontendUrl . '/payment-result.html?status=failed' . $suffix;
+            }
+    
+            if ($c->status !== 'pending') {
+                return $frontendUrl . '/payment-result.html?status=already_processed' . $suffix;
+            }
+    
+            if ($request->query('Status') !== 'OK') {
+                $c->update(['status' => 'failed']);
+                return $frontendUrl . '/payment-result.html?status=cancelled' . $suffix;
+            }
+    
+            $result = $this->zarinpal->verify(
+                amountToman: (int) $c->amount,
+                authority: $authority,
+            );
+    
+            if (! $result['success']) {
+                $c->update(['status' => 'failed']);
+                return $frontendUrl . '/payment-result.html?status=failed' . $suffix;
+            }
+    
+            $c->update(['status' => 'success', 'paid_at' => now()]);
+    
+            app(FinancialLedgerService::class)->recordContribution($c);
+    
+            return $frontendUrl . '/payment-result.html?status=success&ref_id=' . ($result['ref_id'] ?? '') . $suffix;
         });
-
-        if ($contribution->status !== 'pending') {
-            return redirect($frontendUrl . '/payment-result.html?status=already_processed' . $suffix);
-        }
-
-        if ($request->query('Status') !== 'OK') {
-            $contribution->update(['status' => 'failed']);
-            return redirect($frontendUrl . '/payment-result.html?status=cancelled' . $suffix);
-        }
-
-        $result = $this->zarinpal->verify(
-            amountToman: (int) $contribution->amount,
-            authority: $request->query('Authority'),
-        );
-
-        if (! $result['success']) {
-            $contribution->update(['status' => 'failed']);
-            return redirect($frontendUrl . '/payment-result.html?status=failed' . $suffix);
-        }
-
-        $contribution->update([
-            'status' => 'success',
-            'paid_at' => now(),
-        ]);
-
-        app(FinancialLedgerService::class)->recordContribution($contribution);
-
-        return redirect($frontendUrl . '/payment-result.html?status=success&ref_id=' . $result['ref_id'] . $suffix);
+    
+        return redirect($redirectTo);
     }
 }

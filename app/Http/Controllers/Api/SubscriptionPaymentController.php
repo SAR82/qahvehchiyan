@@ -81,58 +81,68 @@ class SubscriptionPaymentController extends Controller
     public function verify(Request $request, SubscriptionTransaction $subscriptionTransaction)
     {
         $frontendUrl = config('app.frontend_url');
-
-        $subscriptionTransaction = DB::transaction(function () use ($subscriptionTransaction) {
-            return SubscriptionTransaction::lockForUpdate()->find($subscriptionTransaction->id);
+        $authority = (string) $request->query('Authority', '');
+    
+        $redirectTo = DB::transaction(function () use ($subscriptionTransaction, $request, $authority, $frontendUrl) {
+            // قفل تا پایان تراکنش نگه داشته می‌شود، پس دو callback هم‌زمان همدیگر را رد می‌کنند
+            $tx = SubscriptionTransaction::with(['cafeSubscription', 'plan'])
+                ->lockForUpdate()
+                ->findOrFail($subscriptionTransaction->id);
+    
+            // ۱) Authority باید همان باشد که موقع initiate گرفتیم
+            if (! $tx->gateway_ref || ! hash_equals($tx->gateway_ref, $authority)) {
+                return $frontendUrl . '/payment-result.html?status=failed';
+            }
+    
+            // ۲) فقط یک بار پردازش شود
+            if ($tx->status !== 'pending') {
+                return $frontendUrl . '/payment-result.html?status=already_processed';
+            }
+    
+            // ۳) انصراف کاربر در درگاه
+            if ($request->query('Status') !== 'OK') {
+                $tx->update(['status' => 'failed']);
+                return $frontendUrl . '/payment-result.html?status=cancelled';
+            }
+    
+            // ۴) تأیید از خود زرین‌پال
+            $result = $this->zarinpal->verify(
+                amountToman: (int) $tx->amount,
+                authority: $authority,
+            );
+    
+            if (! $result['success']) {
+                $tx->update(['status' => 'failed']);
+                return $frontendUrl . '/payment-result.html?status=failed';
+            }
+    
+            // ۵) ثبت موفقیت، دفتر مالی و فعال‌سازی اشتراک، همه در همین تراکنش
+            $tx->update(['status' => 'success', 'paid_at' => now()]);
+    
+            app(FinancialLedgerService::class)->recordSubscriptionRevenue($tx);
+    
+            $cafeSubscription = $tx->cafeSubscription;
+            $plan = $tx->plan;
+    
+            $wasActive = $cafeSubscription->status === 'active'
+                && $cafeSubscription->end_date
+                && $cafeSubscription->end_date->isFuture();
+    
+            $newEndDate = $wasActive
+                ? $cafeSubscription->end_date->copy()->addDays($plan->duration_days)
+                : now()->addDays($plan->duration_days);
+    
+            $cafeSubscription->update([
+                'status' => 'active',
+                'start_date' => $cafeSubscription->start_date ?? now(),
+                'end_date' => $newEndDate,
+                'plan_id' => $plan->id,
+            ]);
+    
+            return $frontendUrl . '/payment-result.html?status=success&ref_id=' . ($result['ref_id'] ?? '');
         });
-
-        if ($subscriptionTransaction->status !== 'pending') {
-            return redirect($frontendUrl . '/payment-result.html?status=already_processed');
-        }
-
-        if ($request->query('Status') !== 'OK') {
-            $subscriptionTransaction->update(['status' => 'failed']);
-            return redirect($frontendUrl . '/payment-result.html?status=cancelled');
-        }
-
-        $result = $this->zarinpal->verify(
-            amountToman: (int) $subscriptionTransaction->amount,
-            authority: $request->query('Authority'),
-        );
-
-        if (! $result['success']) {
-            $subscriptionTransaction->update(['status' => 'failed']);
-            return redirect($frontendUrl . '/payment-result.html?status=failed');
-        }
-
-        $subscriptionTransaction->update([
-            'status' => 'success',
-            'paid_at' => now(),
-        ]);
-
-        app(FinancialLedgerService::class)->recordSubscriptionRevenue($subscriptionTransaction);
-
-        $cafeSubscription = $subscriptionTransaction->cafeSubscription;
-        $plan = $subscriptionTransaction->plan;
-
-        $wasActive = $cafeSubscription->status === 'active'
-            && $cafeSubscription->end_date
-            && $cafeSubscription->end_date->isFuture();
-
-        // اگر اشتراک از قبل فعال بود، روزهای جدید را روی end_date فعلی اضافه می‌کنیم
-        // در غیر این صورت، از امروز شروع می‌کنیم
-        $newEndDate = $wasActive
-            ? $cafeSubscription->end_date->copy()->addDays($plan->duration_days)
-            : now()->addDays($plan->duration_days);
-
-        $cafeSubscription->update([
-            'status' => 'active',
-            'start_date' => $cafeSubscription->start_date ?? now(),
-            'end_date' => $newEndDate,
-            'plan_id' => $plan->id,
-        ]);
-
-        return redirect($frontendUrl . '/payment-result.html?status=success&ref_id=' . $result['ref_id']);
+    
+        return redirect($redirectTo);
     }
 
     public function plans()

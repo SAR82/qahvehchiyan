@@ -153,29 +153,37 @@ class CafeAdminController extends Controller
     }
 
 
-    public function impersonate(Request $request, Cafe $cafe)
-    {
-        if ($request->user('admin')->role !== 'super_admin') {
-            return response()->json([
-                'message' => 'فقط مدیر ارشد اجازه‌ی ورود به پنل کافه‌ها را دارد.',
-            ], 403);
-        }
-
-        $owner = $cafe->owner ?? $cafe->users()->where('role', 'owner')->first();
-
-        if (! $owner) {
-            return response()->json(['message' => 'این کافه مالکی ندارد.'], 422);
-        }
-
-        $token = $owner->createToken(
-            'impersonated_by_admin',
-            ['*'],
-            now()->addHours(2)
-        )->plainTextToken;
-
+public function impersonate(Request $request, Cafe $cafe)
+{
+    if ($request->user('admin')->role !== 'super_admin') {
         return response()->json([
-            'token' => $token,
-            'user' => $owner,
-        ]);
+            'message' => 'فقط مدیر ارشد اجازه‌ی ورود به پنل کافه‌ها را دارد.',
+        ], 403);
     }
+
+    $owner = $cafe->owner ?? $cafe->users()->where('role', 'owner')->first();
+
+    if (! $owner) {
+        return response()->json(['message' => 'این کافه مالکی ندارد.'], 422);
+    }
+
+    $token = $owner->createToken(
+        'impersonated_by_admin',
+        ['*'],
+        now()->addHours(2)
+    )->plainTextToken;
+
+    // ← کد جدید اینجاست
+    \Illuminate\Support\Facades\Log::warning('admin impersonation', [
+        'admin_id' => $request->user('admin')->id,
+        'cafe_id' => $cafe->id,
+        'owner_id' => $owner->id,
+        'ip' => $request->ip(),
+    ]);
+
+    return response()->json([
+        'token' => $token,
+        'user' => $owner,
+    ]);
+}
 }
