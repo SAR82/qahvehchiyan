@@ -56,6 +56,13 @@ class UserController extends Controller
 
         $user->update($data);
 
+        // توکن‌های قبلی هنگام غیرفعال‌شدن، تغییر رمز یا تغییر نقش باطل شوند
+        if (isset($data['password'])
+            || (isset($data['is_active']) && ! $data['is_active'])
+            || isset($data['role'])) {
+            $user->tokens()->delete();
+        }
+
         return $user;
     }
 

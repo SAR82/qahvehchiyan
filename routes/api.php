@@ -29,13 +29,14 @@ use Illuminate\Support\Facades\Route;
 Route::post('/login', [AuthController::class, 'login'])->middleware('throttle:5,1');
 Route::post('/register', [AuthController::class, 'register'])->middleware('throttle:5,1');
 Route::get('/subscription-plans', [SubscriptionPaymentController::class, 'plans']);
-Route::post('/otp/request', [AuthController::class, 'requestOtp']);
-Route::post('/otp/verify', [AuthController::class, 'verifyOtp']);
+Route::post('/otp/request', [AuthController::class, 'requestOtp'])->middleware('throttle:5,1');
+Route::post('/otp/verify', [AuthController::class, 'verifyOtp'])->middleware('throttle:10,1');
+
 
 // callback زرین‌پال (بدون نیاز به توکن)
 Route::get('/subscription-payments/{subscriptionTransaction}/verify', [SubscriptionPaymentController::class, 'verify']);
 
-Route::middleware('auth:sanctum')->group(function () {
+Route::middleware(['auth:sanctum', 'active.user'])->group(function () {
     Route::post('/logout', [AuthController::class, 'logout']);
     Route::get('/me', [AuthController::class, 'me']);
 
@@ -162,10 +163,10 @@ Route::middleware('auth:sanctum')->group(function () {
 
 Route::prefix('admin')->group(function () {
     Route::post('/login', [AdminAuthController::class, 'login'])->middleware('throttle:5,1');
-    Route::post('/otp/request', [AdminAuthController::class, 'requestOtp']);
-    Route::post('/otp/verify', [AdminAuthController::class, 'verifyOtp']);
+    Route::post('/otp/request', [AdminAuthController::class, 'requestOtp'])->middleware('throttle:5,1');
+    Route::post('/otp/verify', [AdminAuthController::class, 'verifyOtp'])->middleware('throttle:10,1');
     
-    Route::middleware('auth:admin')->group(function () {
+    Route::middleware(['auth:admin', 'active.user'])->group(function () {
         Route::post('/logout', [AdminAuthController::class, 'logout']);
         Route::get('/me', [AdminAuthController::class, 'me']);
         

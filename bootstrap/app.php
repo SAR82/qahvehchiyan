@@ -16,6 +16,7 @@ return Application::configure(basePath: dirname(__DIR__))
         $middleware->alias([
             'cafe.subscription.active' => \App\Http\Middleware\EnsureCafeSubscriptionActive::class,
             'check.permission' => \App\Http\Middleware\CheckPermission::class,
+            'active.user' => \App\Http\Middleware\EnsureActiveUser::class,
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {

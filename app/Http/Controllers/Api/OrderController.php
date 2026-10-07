@@ -217,7 +217,7 @@ class OrderController extends Controller
             // فاکتور قبلی با اقلام/مبلغ جدید نمی‌خواند؛ حذف می‌شود تا با دکمه‌ی «فاکتور» دوباره صادر شود
             if ($order->invoice) {
                 if ($order->invoice->pdf_path) {
-                    @unlink(storage_path('app/public/' . $order->invoice->pdf_path));
+                    \Illuminate\Support\Facades\Storage::disk('local')->delete($order->invoice->pdf_path);
                 }
                 $order->invoice->delete();
             }

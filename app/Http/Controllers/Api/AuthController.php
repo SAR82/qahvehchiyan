@@ -105,19 +105,17 @@ class AuthController extends Controller
             'phone' => ['required', 'string'],
         ]);
 
-        $owner = User::where('phone', $data['phone'])->where('role', 'owner')->first();
+        $owner = User::where('phone', $data['phone'])
+            ->where('role', 'owner')
+            ->where('is_active', true)
+            ->first();
 
-        if (! $owner) {
-            return response()->json(['message' => 'شماره‌ای با نقش مالک کافه یافت نشد.'], 404);
+        if ($owner && ! $otpService->isLocked($data['phone'], 'cafe_owner')) {
+            $otpService->requestCode($data['phone'], 'cafe_owner');
         }
 
-        $sent = $otpService->requestCode($data['phone'], 'cafe_owner');
-
-        if (! $sent) {
-            return response()->json(['message' => 'لطفاً کمی صبر کنید و دوباره تلاش کنید.'], 429);
-        }
-
-        return response()->json(['message' => 'کد تایید ارسال شد.']);
+        // پاسخ همیشه یکسان است، چه شماره باشد چه نباشد
+        return response()->json(['message' => 'اگر این شماره ثبت شده باشد، کد ارسال شد.']);
     }
 
     public function verifyOtp(Request $request, OtpService $otpService)
@@ -127,17 +125,20 @@ class AuthController extends Controller
             'code' => ['required', 'string'],
         ]);
 
-        $owner = User::where('phone', $data['phone'])->where('role', 'owner')->first();
+        if ($otpService->isLocked($data['phone'], 'cafe_owner')) {
+            return response()->json(['message' => 'تلاش‌های ناموفق زیاد است. بعداً دوباره امتحان کنید.'], 429);
+        }
+
+        if (! $otpService->verifyCode($data['phone'], $data['code'], 'cafe_owner')) {
+            return response()->json(['message' => 'کد وارد شده نامعتبر یا منقضی شده است.'], 422);
+        }
+
+        $owner = User::where('phone', $data['phone'])
+            ->where('role', 'owner')
+            ->where('is_active', true)
+            ->first();
 
         if (! $owner) {
-            return response()->json(['message' => 'شماره‌ای با نقش مالک کافه یافت نشد.'], 404);
-        }
-
-        if ($otpService->isLocked($data['phone'], 'cafe_owner')) {
-            return response()->json(['message' => 'به دلیل تلاش‌های ناموفق زیاد، تا ۳۰ دقیقه دیگر امکان ورود وجود ندارد.'], 429);
-        }
-    
-        if (! $otpService->verifyCode($data['phone'], $data['code'], 'cafe_owner')) {
             return response()->json(['message' => 'کد وارد شده نامعتبر یا منقضی شده است.'], 422);
         }
 
