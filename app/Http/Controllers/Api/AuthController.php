@@ -11,6 +11,7 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Validation\ValidationException;
 use App\Services\OtpService;
+use Illuminate\Support\Str;
 
 class AuthController extends Controller
 {
@@ -61,24 +62,52 @@ class AuthController extends Controller
         return response()->json($request->user()->load('cafe'));
     }
 
-    public function register(Request $request)
+    public function requestRegisterOtp(Request $request, OtpService $otpService)
     {
-        $data = $request->validate([
-            'cafe_name' => ['required', 'string', 'max:255'],
-            'phone' => ['required', 'string', 'unique:users,phone'],
-            'password' => ['required', 'string', 'min:6'],
-        ]);
+        $data = $request->validate(
+            ['phone' => ['required', 'string', 'regex:/^09\d{9}$/', 'unique:users,phone']],
+            [
+                'phone.unique' => 'این شماره قبلاً ثبت شده است؛ از صفحه‌ی ورود وارد شوید.',
+                'phone.regex'  => 'شماره تلفن باید به‌صورت 09123456789 باشد.',
+            ]
+        );
 
-        $result = DB::transaction(function () use ($data) {
-            $cafe = Cafe::create([
-                'name' => $data['cafe_name'],
-                'status' => 'pending',
-            ]);
+        if ($otpService->isLocked($data['phone'], 'cafe_register')) {
+            return response()->json(['message' => 'تلاش‌های زیاد است. بعداً دوباره امتحان کنید.'], 429);
+        }
+
+        $otpService->requestCode($data['phone'], 'cafe_register');
+
+        return response()->json(['message' => 'کد تأیید ارسال شد.']);
+    }
+
+    public function register(Request $request, OtpService $otpService)
+    {
+        $data = $request->validate(
+            [
+                'cafe_name' => ['required', 'string', 'max:255'],
+                'phone' => ['required', 'string', 'regex:/^09\d{9}$/', 'unique:users,phone'],
+                'code' => ['required', 'string'],
+            ],
+            ['phone.unique' => 'این شماره قبلاً ثبت شده است؛ از صفحه‌ی ورود وارد شوید.',
+              'phone.regex'  => 'شماره تلفن باید به‌صورت 09123456789 باشد.',]
+        );
+
+        if ($otpService->isLocked($data['phone'], 'cafe_register')) {
+            return response()->json(['message' => 'تلاش‌های ناموفق زیاد است. بعداً دوباره امتحان کنید.'], 429);
+        }
+
+        if (! $otpService->verifyCode($data['phone'], $data['code'], 'cafe_register')) {
+            return response()->json(['message' => 'کد وارد شده نامعتبر یا منقضی شده است.'], 422);
+        }
+
+        $owner = DB::transaction(function () use ($data) {
+            $cafe = Cafe::create(['name' => $data['cafe_name'], 'status' => 'pending']);
 
             $owner = User::create([
                 'cafe_id' => $cafe->id,
                 'phone' => $data['phone'],
-                'password' => bcrypt($data['password']),
+                'password' => bcrypt(Str::random(40)), // مالک فقط با کد پیامکی وارد می‌شود
                 'role' => 'owner',
             ]);
 
@@ -88,14 +117,10 @@ class AuthController extends Controller
             return $owner;
         });
 
-        
-
-        $token = $result->createToken('auth_token')->plainTextToken;
-
         return response()->json([
             'message' => 'ثبت‌نام با موفقیت انجام شد. کافه شما در انتظار تایید مدیریت است.',
-            'user' => $result,
-            'token' => $token,
+            'user' => $owner,
+            'token' => $owner->createToken('auth_token')->plainTextToken,
         ], 201);
     }
 

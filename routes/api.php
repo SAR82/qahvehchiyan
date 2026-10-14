@@ -31,6 +31,7 @@ Route::post('/register', [AuthController::class, 'register'])->middleware('throt
 Route::get('/subscription-plans', [SubscriptionPaymentController::class, 'plans']);
 Route::post('/otp/request', [AuthController::class, 'requestOtp'])->middleware('throttle:5,1');
 Route::post('/otp/verify', [AuthController::class, 'verifyOtp'])->middleware('throttle:10,1');
+Route::post('/register/otp/request', [AuthController::class, 'requestRegisterOtp'])->middleware('throttle:5,1');
 
 
 // callback زرین‌پال (بدون نیاز به توکن)

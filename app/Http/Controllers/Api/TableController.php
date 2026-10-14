@@ -11,7 +11,7 @@ class TableController extends Controller
 {
     public function index()
     {
-        return CafeTable::where('is_active', true)->get();
+        return CafeTable::get();
     }
 
     public function store(Request $request)
