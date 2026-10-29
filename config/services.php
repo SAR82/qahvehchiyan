@@ -40,9 +40,11 @@ return [
         'sandbox' => env('ZARINPAL_SANDBOX', true),
     ],
 
-    'kavenegar' => [
-    'api_key' => env('KAVENEGAR_API_KEY'),
-    'sender' => env('KAVENEGAR_SENDER'),
-],
+    'smsir' => [
+    'api_key' => env('SMSIR_API_KEY'),
+    'line_number' => env('SMSIR_LINE_NUMBER'),
+    'otp_template_id' => env('SMSIR_OTP_TEMPLATE_ID'),
+    'low_stock_template_id' => env('SMSIR_LOW_STOCK_TEMPLATE_ID'),
+    ],
 
 ];

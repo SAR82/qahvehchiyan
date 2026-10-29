@@ -3,6 +3,8 @@
 namespace App\Services;
 
 use App\Models\InventoryItem;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Str;
 
 class LowStockNotifier
 {
@@ -10,37 +12,59 @@ class LowStockNotifier
     {
     }
 
-    /**
-     * وضعیت موجودی یک کالا را نسبت به آستانه‌ی هشدار بررسی می‌کند.
-     * - اگر موجودی به آستانه رسیده/زیرش رفته و قبلاً پیامکی برای این افت ارسال نشده، پیامک می‌فرستد.
-     * - اگر موجودی دوباره بالای آستانه رفته، وضعیت را ریست می‌کند تا افت بعدی دوباره هشدار بدهد.
-     */
     public function checkAndNotify(InventoryItem $item): void
     {
-        $isLow = $item->current_stock <= $item->low_stock_threshold;
+        $isLow = (float) $item->current_stock <= (float) $item->low_stock_threshold;
 
-        if ($isLow && ! $item->low_stock_notified_at) {
-            $this->notifyOwner($item);
-            $item->low_stock_notified_at = now();
-            $item->save();
+        if (! $isLow) {
+            // موجودی دوباره بالا رفته: افت بعدی دوباره هشدار بدهد
+            if ($item->low_stock_notified_at) {
+                InventoryItem::withoutGlobalScopes()->whereKey($item->id)
+                    ->update(['low_stock_notified_at' => null]);
+            }
             return;
         }
 
-        if (! $isLow && $item->low_stock_notified_at) {
-            $item->low_stock_notified_at = null;
-            $item->save();
+        // فقط یک درخواست می‌تواند «پرچم» را از خالی به پر ببرد؛ پیامک تکراری نمی‌رود
+        $claimed = InventoryItem::withoutGlobalScopes()->whereKey($item->id)
+            ->whereNull('low_stock_notified_at')
+            ->update(['low_stock_notified_at' => now()]);
+
+        if ($claimed === 1 && ! $this->notifyOwner($item)) {
+            // ارسال شکست خورد: پرچم را برمی‌داریم تا دفعه‌ی بعد دوباره تلاش شود
+            InventoryItem::withoutGlobalScopes()->whereKey($item->id)
+                ->update(['low_stock_notified_at' => null]);
         }
     }
 
-    protected function notifyOwner(InventoryItem $item): void
+    protected function notifyOwner(InventoryItem $item): bool
     {
-        $owner = $item->cafe->owner ?? $item->cafe->users()->where('role', 'owner')->first();
+        $templateId = config('services.smsir.low_stock_template_id');
+        $cafe = $item->cafe;
+        $owner = $cafe?->owner ?? $cafe?->users()->where('role', 'owner')->first();
 
-        if (! $owner || ! $owner->phone) {
-            return;
+        if (! $templateId || ! $owner || ! $owner->phone) {
+            return true; // چیزی برای ارسال نیست؛ دوباره تلاش نکن
         }
 
-        $message = "هشدار قهوه‌چیان ({$item->cafe->name}): موجودی «{$item->name}» به {$item->current_stock} {$item->unit} رسیده (آستانه: {$item->low_stock_threshold} {$item->unit}).";
-        $this->sms->send($owner->phone, $message);
+        try {
+            // اینجا مقدار متغیرهای قالب ساخته می‌شود
+            return $this->sms->sendTemplate($owner->phone, $templateId, [
+                'ITEM' => Str::limit($item->name, 15, ''),
+                'CAFE' => Str::limit($cafe->name, 15, ''),
+                'STOCK' => $this->withUnit($item->current_stock, $item->unit),
+            ]);
+        } catch (\Throwable $e) {
+            Log::warning('low stock sms failed', ['item_id' => $item->id, 'error' => $e->getMessage()]);
+            return false;
+        }
+    }
+
+    // «100.000» را «100» می‌کند و واحد را کنارش می‌گذارد
+    protected function withUnit($value, string $unit): string
+    {
+        $n = rtrim(rtrim(number_format((float) $value, 3, '.', ''), '0'), '.');
+
+        return Str::limit($n.' '.$unit, 12, '');
     }
 }

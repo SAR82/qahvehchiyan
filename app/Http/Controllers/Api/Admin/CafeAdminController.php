@@ -11,6 +11,8 @@ use App\Models\User;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
+use Illuminate\Support\Str;
+
 
 class CafeAdminController extends Controller
 {
@@ -41,22 +43,24 @@ class CafeAdminController extends Controller
 
     public function store(Request $request)
     {
-        $data = $request->validate([
-            'cafe_name' => ['required', 'string', 'max:255'],
-            'owner_phone' => ['required', 'string', 'unique:users,phone'],
-            'owner_password' => ['required', 'string', 'min:6'],
-        ]);
+        $data = $request->validate(
+            [
+                'cafe_name' => ['required', 'string', 'max:255'],
+                'owner_phone' => ['required', 'string', 'regex:/^09\d{9}$/', 'unique:users,phone'],
+            ],
+            [
+                'owner_phone.unique' => 'این شماره قبلاً ثبت شده است.',
+                'owner_phone.regex' => 'شماره تلفن باید به‌صورت 09123456789 باشد.',
+            ]
+        );
 
         $result = DB::transaction(function () use ($data) {
-            $cafe = Cafe::create([
-                'name' => $data['cafe_name'],
-                'status' => 'pending',
-            ]);
+            $cafe = Cafe::create(['name' => $data['cafe_name'], 'status' => 'approved']);
 
             $owner = User::create([
                 'cafe_id' => $cafe->id,
                 'phone' => $data['owner_phone'],
-                'password' => bcrypt($data['owner_password']),
+                'password' => bcrypt(Str::random(40)), // مالک فقط با کد پیامکی وارد می‌شود
                 'role' => 'owner',
             ]);
 
@@ -68,6 +72,7 @@ class CafeAdminController extends Controller
 
         return response()->json($result, 201);
     }
+
 
     public function show(Cafe $cafe)
     {
@@ -147,43 +152,81 @@ class CafeAdminController extends Controller
 
     public function destroy(Cafe $cafe)
     {
-        $cafe->delete();
+        DB::transaction(function () use ($cafe) {
+            $id = $cafe->id;
+
+            $orderIds   = DB::table('orders')->where('cafe_id', $id)->pluck('id');
+            $productIds = DB::table('products')->where('cafe_id', $id)->pluck('id');
+            $itemIds    = DB::table('inventory_items')->where('cafe_id', $id)->pluck('id');
+            $subIds     = DB::table('cafe_subscriptions')->where('cafe_id', $id)->pluck('id');
+
+            DB::table('inventory_transactions')->whereIn('item_id', $itemIds)->delete();
+
+            DB::table('payments')->whereIn('order_id', $orderIds)->delete();
+            DB::table('invoices')->whereIn('order_id', $orderIds)->delete();
+            DB::table('order_items')->whereIn('order_id', $orderIds)->delete();
+            DB::table('orders')->where('cafe_id', $id)->delete();
+
+            DB::table('product_ingredients')->whereIn('product_id', $productIds)->delete();
+            DB::table('products')->where('cafe_id', $id)->delete();
+            DB::table('inventory_items')->where('cafe_id', $id)->delete();
+            DB::table('product_categories')->where('cafe_id', $id)->delete();
+            DB::table('cafe_tables')->where('cafe_id', $id)->delete();
+            DB::table('discount_codes')->where('cafe_id', $id)->delete();
+            DB::table('financial_transactions')->where('cafe_id', $id)->delete();
+            DB::table('financial_categories')->where('cafe_id', $id)->delete();
+            DB::table('cafe_order_counters')->where('cafe_id', $id)->delete();
+
+            DB::table('subscription_transactions')->whereIn('cafe_subscription_id', $subIds)->delete();
+            DB::table('cafe_subscriptions')->where('cafe_id', $id)->delete();
+
+            DB::table('cafes')->where('id', $id)->update(['owner_id' => null]);
+
+            $userIds = DB::table('users')->where('cafe_id', $id)->pluck('id');
+            DB::table('personal_access_tokens')
+                ->where('tokenable_type', \App\Models\User::class)
+                ->whereIn('tokenable_id', $userIds)
+                ->delete();
+            DB::table('users')->where('cafe_id', $id)->delete();
+
+            $cafe->delete();
+        });
 
         return response()->json(null, 204);
     }
 
 
-public function impersonate(Request $request, Cafe $cafe)
-{
-    if ($request->user('admin')->role !== 'super_admin') {
+    public function impersonate(Request $request, Cafe $cafe)
+    {
+        if ($request->user('admin')->role !== 'super_admin') {
+            return response()->json([
+                'message' => 'فقط مدیر ارشد اجازه‌ی ورود به پنل کافه‌ها را دارد.',
+            ], 403);
+        }
+
+        $owner = $cafe->owner ?? $cafe->users()->where('role', 'owner')->first();
+
+        if (! $owner) {
+            return response()->json(['message' => 'این کافه مالکی ندارد.'], 422);
+        }
+
+        $token = $owner->createToken(
+            'impersonated_by_admin',
+            ['*'],
+            now()->addHours(2)
+        )->plainTextToken;
+
+        // ← کد جدید اینجاست
+        \Illuminate\Support\Facades\Log::warning('admin impersonation', [
+            'admin_id' => $request->user('admin')->id,
+            'cafe_id' => $cafe->id,
+            'owner_id' => $owner->id,
+            'ip' => $request->ip(),
+        ]);
+
         return response()->json([
-            'message' => 'فقط مدیر ارشد اجازه‌ی ورود به پنل کافه‌ها را دارد.',
-        ], 403);
+            'token' => $token,
+            'user' => $owner,
+        ]);
     }
-
-    $owner = $cafe->owner ?? $cafe->users()->where('role', 'owner')->first();
-
-    if (! $owner) {
-        return response()->json(['message' => 'این کافه مالکی ندارد.'], 422);
-    }
-
-    $token = $owner->createToken(
-        'impersonated_by_admin',
-        ['*'],
-        now()->addHours(2)
-    )->plainTextToken;
-
-    // ← کد جدید اینجاست
-    \Illuminate\Support\Facades\Log::warning('admin impersonation', [
-        'admin_id' => $request->user('admin')->id,
-        'cafe_id' => $cafe->id,
-        'owner_id' => $owner->id,
-        'ip' => $request->ip(),
-    ]);
-
-    return response()->json([
-        'token' => $token,
-        'user' => $owner,
-    ]);
-}
 }

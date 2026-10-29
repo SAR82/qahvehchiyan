@@ -8,7 +8,7 @@ use Illuminate\Support\Facades\RateLimiter;
 
 class OtpService
 {
-    protected const MAX_ATTEMPTS = 5;
+    protected const MAX_ATTEMPTS = 6;
     protected const LOCK_SECONDS = 1800;
 
     public function __construct(protected SmsService $sms)
@@ -27,7 +27,7 @@ class OtpService
             ->whereNull('consumed_at')
             ->update(['consumed_at' => now()]);
 
-        $code = (string) random_int(100000, 999999);
+        $code = (string) random_int(10000, 99999);
 
         OtpCode::create([
             'phone' => $phone,
@@ -38,8 +38,7 @@ class OtpService
 
         // عمداً شمارنده‌ی تلاش‌ها را ریست نمی‌کنیم
 
-        $this->sms->send($phone, "قهوه‌چیان: کد ورود شما {$code} است. تا ۲ دقیقه معتبر است.");
-
+        $this->sms->sendOtp($phone, $code);
         return true;
     }
 

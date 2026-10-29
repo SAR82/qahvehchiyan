@@ -76,13 +76,19 @@ class InventoryTransactionController extends Controller
             $item->current_stock = $newStock;
             $item->save();
             
-            app(LowStockNotifier::class)->checkAndNotify($item);
-
             $transaction->setRelation('item', $item);
             app(FinancialLedgerService::class)->recordInventoryPurchase($transaction);
 
             return $transaction;
         });
+        // پیامک هشدار بعد از ارسال پاسخ اجرا می‌شود
+        $itemId = $item->id;
+        dispatch(function () use ($itemId) {
+            $fresh = \App\Models\InventoryItem::withoutGlobalScopes()->find($itemId);
+            if ($fresh) {
+                app(\App\Services\LowStockNotifier::class)->checkAndNotify($fresh);
+            }
+        })->afterResponse();
 
         return response()->json($transaction->load('item'), 201);
     }

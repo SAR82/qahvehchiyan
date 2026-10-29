@@ -70,8 +70,8 @@ class AdminAuthController extends Controller
             return response()->json(['message' => 'کد وارد شده نامعتبر یا منقضی شده است.'], 422);
         }
 
-        $token = $admin->createToken('otp_login')->plainTextToken;
-        // $token = $admin->createToken('otp_login', ['*'], now()->addHours(8))->plainTextToken;
+        //$token = $admin->createToken('otp_login')->plainTextToken;
+        $token = $admin->createToken('otp_login', ['*'], now()->addHours(8))->plainTextToken;
 
         return response()->json([
             'token' => $token,
